@@ -1,0 +1,230 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      security-events: write
+
+    env:
+      WM_NCOMPPROCS: "2"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+
+      - name: Install system dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            gcc g++ make \
+            flex bison libfl-dev \
+            libopenmpi-dev openmpi-bin \
+            libscotch-dev libptscotch-dev \
+            libmetis-dev libparmetis-dev \
+            python3 \
+            libtrilinos-zoltan-dev
+
+          pkg="$(apt-cache search '^libtrilinos-zoltan-[0-9]+' | awk '{print $1}' | head -n 1 || true)"
+          if [ -n "$pkg" ]; then
+            sudo apt-get install -y "$pkg"
+          else
+            sudo apt-get install -y libtrilinos-zoltan || true
+          fi
+
+      - name: Provide zoltan.h compatibility header
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -r /usr/include/trilinos/zoltan.h
+          if test -e /usr/include/zoltan.h; then
+            echo "/usr/include/zoltan.h already exists"
+          else
+            echo '#include <trilinos/zoltan.h>' | sudo tee /usr/include/zoltan.h >/dev/null
+            echo "Created /usr/include/zoltan.h shim"
+          fi
+          test -r /usr/include/zoltan.h
+
+      - name: Provide zoltan library symlink for -lzoltan
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          lib="$(find /usr/lib /lib -type f -name 'libtrilinos_zoltan.so*' 2>/dev/null | head -n 1 || true)"
+          if [ -z "$lib" ]; then
+            echo "ERROR: libtrilinos_zoltan.so* not found. Installed packages:"
+            dpkg -l | grep -i zoltan || true
+            exit 1
+          fi
+
+          dir="$(dirname "$lib")"
+          echo "Found: $lib"
+          echo "Using dir: $dir"
+
+          if [ ! -e "$dir/libzoltan.so" ]; then
+            sudo ln -s "$(basename "$lib")" "$dir/libzoltan.so"
+            echo "Created symlink: $dir/libzoltan.so -> $(basename "$lib")"
+          else
+            echo "Symlink already exists: $dir/libzoltan.so"
+          fi
+
+          # ldconfig may not list unversioned linker symlinks; verify the file exists instead.
+          test -e "$dir/libzoltan.so"
+          ls -la "$dir/libzoltan.so"
+
+      - name: Preflight checks
+        shell: bash
+        run: |
+          set -euxo pipefail
+          test -r /usr/include/FlexLexer.h
+          test -r /usr/include/scotch/scotch.h || test -r /usr/include/scotch.h
+          test -r /usr/include/zoltan.h
+          test -r /usr/include/metis.h || test -r /usr/include/metis/metis.h
+
+          if dpkg -s libparmetis-dev >/dev/null 2>&1; then
+            test -r /usr/include/parmetis.h || test -r /usr/include/parmetis/parmetis.h
+          fi
+
+          # Verify linker symlink exists (better than ldconfig -p for this case)
+          test -e /usr/lib/x86_64-linux-gnu/libzoltan.so || test -e /usr/lib/libzoltan.so
+
+      - name: Capture OpenFOAM environment
+        shell: bash
+        run: |
+          set -euxo pipefail
+          rm -f foam.env _foam_env.sh
+          export ZSH_NAME=""
+
+          bash -i -c 'set +u; export ZSH_NAME=""; source etc/bashrc >/dev/null 2>&1; env' 2>/dev/null > foam.env
+
+          {
+            echo "set -a"
+            while IFS= read -r line; do
+              case "$line" in
+                *=*) ;;
+                *) continue ;;
+              esac
+
+              key="${line%%=*}"
+              val="${line#*=}"
+
+              if [[ "$key" == WM_* || "$key" == FOAM_* || \
+                    "$key" == PATH || "$key" == LD_LIBRARY_PATH || "$key" == LIBRARY_PATH || \
+                    "$key" == CPATH || "$key" == CPLUS_INCLUDE_PATH || "$key" == C_INCLUDE_PATH || \
+                    "$key" == CC || "$key" == CXX ]]; then
+                printf 'export %s=%q\n' "$key" "$val"
+              fi
+            done < foam.env
+            echo "set +a"
+          } > _foam_env.sh
+
+          test -s _foam_env.sh
+          source _foam_env.sh
+          test -n "${WM_PROJECT_DIR:-}"
+          test -d "${WM_PROJECT_DIR:-}"
+
+      - name: Install CI wmkdep
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source _foam_env.sh
+
+          mkdir -p "$WM_PROJECT_DIR/wmake/platforms/linux64Gcc"
+
+          cat > "$WM_PROJECT_DIR/wmake/platforms/linux64Gcc/wmkdep" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          out=""
+          src=""
+          pass=()
+
+          : "${WM_LABEL_SIZE:=32}"
+          : "${WM_PRECISION:=DP}"
+
+          args=("$@")
+          skip=0
+          for ((i=0; i<${#args[@]}; i++)); do
+            a="${args[$i]}"
+
+            if [[ $skip -eq 1 ]]; then skip=0; continue; fi
+
+            if [[ "$a" == *'$('* ]]; then continue; fi
+
+            if [[ "$a" == "-R" ]]; then skip=1; continue; fi
+            if [[ "$a" == -R* ]]; then continue; fi
+
+            if [[ "$a" == "-o" && $((i+1)) -lt ${#args[@]} ]]; then
+              out="${args[$((i+1))]}"
+              skip=1
+              continue
+            fi
+            if [[ "$a" == *.dep ]]; then out="$a"; continue; fi
+
+            case "$a" in
+              *.C|*.cc|*.cpp|*.Cxx|*.L|*.Cver) src="$a"; continue ;;
+            esac
+
+            if [[ "$a" == */ && "$a" != -* ]]; then continue; fi
+            if [[ "$a" != -* && ! -e "$a" ]]; then continue; fi
+
+            pass+=("$a")
+          done
+
+          if [[ -z "$src" ]]; then
+            echo "wmkdep: no source file found (args: $*)" >&2
+            exit 2
+          fi
+          if [[ -z "$out" ]]; then out="${src}.dep"; fi
+
+          pass+=("-DWM_LABEL_SIZE=${WM_LABEL_SIZE}")
+          pass+=("-DWM_${WM_PRECISION}")
+
+          obj="${out%.dep}.o"
+          mkdir -p "$(dirname "$out")"
+
+          cxx="${CXX:-g++}"
+          lang=()
+          [[ "$src" == *.Cver ]] && lang=(-x c++)
+
+          "$cxx" -MM -MG "${lang[@]}" "${pass[@]}" "$src" \
+            | sed "1s|^[^:]*:|$obj:|" > "$out"
+          EOF
+
+          chmod +x "$WM_PROJECT_DIR/wmake/platforms/linux64Gcc/wmkdep"
+
+      - name: Smoke build (scotch)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source _foam_env.sh
+          cd src/parallel/decompose/scotch
+          wmake
+
+      - name: Full OpenFOAM build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source _foam_env.sh
+          ./Allwmake -j "$WM_NCOMPPROCS"
+
+      - name: Run CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:cpp
