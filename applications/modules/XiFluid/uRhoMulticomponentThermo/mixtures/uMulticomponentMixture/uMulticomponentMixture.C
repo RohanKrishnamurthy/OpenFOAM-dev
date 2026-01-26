@@ -2,7 +2,7 @@
   =========                 |
   \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
    \\    /   O peration     | Website:  https://openfoam.org
-    \\  /    A nd           | Copyright (C) 2011-2026 OpenFOAM Foundation
+    \\  /    A nd           | Copyright (C) 2025-2026 OpenFOAM Foundation
      \\/     M anipulation  |
 -------------------------------------------------------------------------------
 License
@@ -23,70 +23,46 @@ License
 
 \*---------------------------------------------------------------------------*/
 
-#include "includeIfPresentEntry.H"
-#include "fileOperation.H"
-#include "addToRunTimeSelectionTable.H"
-#include "addToMemberFunctionSelectionTable.H"
-
-// * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
-
-namespace Foam
-{
-namespace functionEntries
-{
-    defineFunctionTypeNameAndDebug(includeIfPresentEntry, 0);
-
-    addToRunTimeSelectionTable
-    (
-        functionEntry,
-        includeIfPresentEntry,
-        dictionary
-    );
-
-    addToMemberFunctionSelectionTable
-    (
-        functionEntry,
-        includeIfPresentEntry,
-        execute,
-        primitiveEntryIstream
-    );
-}
-}
-
+#include "uMulticomponentMixture.H"
 
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
-Foam::functionEntries::includeIfPresentEntry::includeIfPresentEntry
+template<class ThermoType>
+Foam::uMulticomponentMixture<ThermoType>::uMulticomponentMixture
 (
-    const label lineNumber,
-    const dictionary& parentDict,
-    Istream& is
+    const dictionary& dict
 )
 :
-    includeEntry(typeName, lineNumber, parentDict, is)
+    coefficientMulticomponentMixture<ThermoType>(dict)
 {}
 
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-bool Foam::functionEntries::includeIfPresentEntry::execute
+template<class ThermoType>
+Foam::scalar Foam::uMulticomponentMixture<ThermoType>::Phi
 (
-    dictionary& contextDict,
-    Istream& is
-)
+    const scalarFieldListSlice& Y
+) const
 {
-    return includeEntry::execute(contextDict, is, true);
+    NotImplemented;
+    return 1;
 }
 
 
-bool Foam::functionEntries::includeIfPresentEntry::execute
+template<class ThermoType>
+Foam::PtrList<Foam::volScalarField::Internal>
+Foam::uMulticomponentMixture<ThermoType>::prompt
 (
-    const dictionary& contextDict,
-    primitiveEntry& contextEntry,
-    Istream& is
-)
+    const PtrList<volScalarField>& Yu
+) const
 {
-    return includeEntry::execute(contextDict, contextEntry, is, true);
+    NotImplemented;
+
+    PtrList<volScalarField::Internal> Yp(1);
+    Yp.set(0, Yu[0]());
+
+    return Yp;
 }
 
 
