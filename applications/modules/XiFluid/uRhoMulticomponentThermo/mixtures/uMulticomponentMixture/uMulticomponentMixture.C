@@ -2,7 +2,7 @@
   =========                 |
   \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
    \\    /   O peration     | Website:  https://openfoam.org
-    \\  /    A nd           | Copyright (C) 2025-2026 OpenFOAM Foundation
+    \\  /    A nd           | Copyright (C) 2026 OpenFOAM Foundation
      \\/     M anipulation  |
 -------------------------------------------------------------------------------
 License
@@ -25,44 +25,35 @@ License
 
 #include "uMulticomponentMixture.H"
 
+// * * * * * * * * * * * * * * Static Data Members * * * * * * * * * * * * * //
+
+namespace Foam
+{
+    defineTypeNameAndDebug(uMulticomponentMixture, 0);
+}
+
+
 // * * * * * * * * * * * * * * * * Constructors  * * * * * * * * * * * * * * //
 
-template<class ThermoType>
-Foam::uMulticomponentMixture<ThermoType>::uMulticomponentMixture
+Foam::uMulticomponentMixture::uMulticomponentMixture
 (
+    const speciesTable& species,
     const dictionary& dict
 )
 :
-    coefficientMulticomponentMixture<ThermoType>(dict)
+    fu_(species[dict.lookup<word>("fuelSpecie")]),
+    stoicRatio_(dict.lookup<scalar>("stoichiometricAirFuelMassRatio"))
 {}
 
 
 // * * * * * * * * * * * * * * * Member Functions  * * * * * * * * * * * * * //
 
-template<class ThermoType>
-Foam::scalar Foam::uMulticomponentMixture<ThermoType>::Phi
+Foam::scalar Foam::uMulticomponentMixture::Phi
 (
-    const scalarFieldListSlice& Y
+    const scalarFieldListSlice& Yu
 ) const
 {
-    NotImplemented;
-    return 1;
-}
-
-
-template<class ThermoType>
-Foam::PtrList<Foam::volScalarField::Internal>
-Foam::uMulticomponentMixture<ThermoType>::prompt
-(
-    const PtrList<volScalarField>& Yu
-) const
-{
-    NotImplemented;
-
-    PtrList<volScalarField::Internal> Yp(1);
-    Yp.set(0, Yu[0]());
-
-    return Yp;
+    return stoicRatio_*Yu[fu_]/max(scalar(1) - Yu[fu_], small);
 }
 
 
